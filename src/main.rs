@@ -1,113 +1,91 @@
-use std::fs::read_to_string;
+use std::{fs::read_to_string, io};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
-    layout::{Constraint, Layout},
     prelude::{Buffer, Rect},
-    style::{Modifier, Style, Stylize},
-    text::Text,
-    widgets::{Block, HighlightSpacing, List, ListItem, ListState, StatefulWidget, Widget},
+    widgets::Widget,
     DefaultTerminal,
 };
 
-fn main() {
+use crate::views::{landing::LandingView, register::RegisterView};
+
+pub mod views;
+
+fn main() -> io::Result<()> {
     let terminal = ratatui::init();
     let logo = read_to_string("logo.txt").expect("logo.txt is missing");
-    App::new(&logo).run(terminal);
+    let app_result = App::new(logo).run(terminal);
     ratatui::restore();
+    app_result
 }
 
-struct App<'a> {
+#[derive(Debug, Clone, Copy)]
+pub enum AppState {
+    Landing,
+    Register,
+}
+
+struct App {
     should_exit: bool,
-    logo: &'a str,
-    login_list: LoginList,
+    state: AppState,
+
+    landing_view: LandingView,
+    register_view: RegisterView,
 }
 
-struct LoginList {
-    items: [String; 2],
-    state: ListState,
-}
-
-impl<'a> App<'a> {
-    fn new(logo: &'a str) -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
-
+impl App {
+    fn new(logo: String) -> Self {
         Self {
             should_exit: false,
-            logo,
-            login_list: LoginList {
-                items: ["Login".to_string(), "Register".to_string()],
-                state: list_state,
-            },
+            state: AppState::Landing,
+
+            landing_view: LandingView::new(logo),
+            register_view: RegisterView::default(),
         }
     }
 
-    fn run(mut self, mut terminal: DefaultTerminal) {
+    fn run(mut self, mut terminal: DefaultTerminal) -> io::Result<()> {
         while !self.should_exit {
-            terminal
-                .draw(|frame| frame.render_widget(&mut self, frame.area()))
-                .unwrap();
-            if let Event::Key(key) = event::read().unwrap() {
+            terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
+            if let Event::Key(key) = event::read()? {
                 self.handle_key(key);
             }
         }
+        Ok(())
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
-        match key.code {
-            KeyCode::Char('q') => self.should_exit = true,
-            KeyCode::Char('j') | KeyCode::Down => self.login_list.state.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.login_list.state.select_previous(),
-            _ => {}
+        if let KeyCode::Char('q') = key.code {
+            self.should_exit = true
+        }
+
+        match &mut self.state {
+            AppState::Landing => {
+                self.landing_view.handle_key(key);
+                if let Some(state) = self.landing_view.should_go_to {
+                    self.state = state;
+                }
+                self.landing_view.should_go_to = None;
+            }
+            AppState::Register => {
+                self.register_view.handle_key(key);
+                if let Some(state) = self.register_view.should_go_to {
+                    self.state = state;
+                }
+                self.register_view.should_go_to = None;
+            }
         }
     }
 }
 
-impl<'a> Widget for &mut App<'a> {
+impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let [_, logo_row, _, list_row, _] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(11),
-            Constraint::Length(2),
-            Constraint::Length(4),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
-        let [_, list_column, _] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Percentage(50),
-            Constraint::Fill(1),
-        ])
-        .areas(list_row);
-
-        let [_, logo_column, _] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(78),
-            Constraint::Fill(1),
-        ])
-        .areas(logo_row);
-
-        let items: Vec<ListItem> = self
-            .login_list
-            .items
-            .iter()
-            .map(|item| ListItem::new(item.as_str()))
-            .collect();
-
-        let list = List::new(items)
-            .block(Block::bordered())
-            .style(Style::new().white())
-            .highlight_style(Style::new().blue().add_modifier(Modifier::BOLD))
-            .highlight_symbol("> ")
-            .highlight_spacing(HighlightSpacing::Always);
-
-        StatefulWidget::render(list, list_column, buf, &mut self.login_list.state);
-
-        let logo = Text::from(self.logo).blue();
-        Widget::render(logo, logo_column, buf);
+        match &mut self.state {
+            AppState::Landing => self.landing_view.render(area, buf),
+            AppState::Register => {}
+        }
     }
 }
